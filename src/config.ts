@@ -36,12 +36,13 @@ export function loadDotEnv(): void {
 export interface Config {
   hmacSecret: string;
   kurierApiKey: string | null;
-  subscanApiKey: string | null;
+  pubfiApiKey: string | null;
   agentId: string | null;
   port: number;
   /** Canonical gatekeeper verification-key hash (registered on zkVerify mainnet). */
   gatekeeperVkHash: string;
   kurierApiUrl: string;
+  pubfiApiUrl: string;
   wasmPath: string;
   zkeyPath: string;
   vkPath: string;
@@ -71,12 +72,13 @@ export function loadConfig(): Config {
   return {
     hmacSecret: requiredSecret("AGENT_GAMES_HMAC_SECRET"),
     kurierApiKey: optionalSecret("KURIER_API_KEY"),
-    subscanApiKey: optionalSecret("SUBSCAN_API_KEY"),
+    pubfiApiKey: optionalSecret("PUBFI_API_KEY"),
     agentId: optionalSecret("AGENT_GAMES_AGENT_ID"),
     port: Number(process.env.PORT ?? "3000") || 3000,
     gatekeeperVkHash: (process.env.GATEKEEPER_VK_HASH ??
       "0x6b79c6012a6d8651f3e13bc4d2a20370280ab49700c90c5316d4168bfbad77b0").toLowerCase(),
     kurierApiUrl: (process.env.KURIER_API_URL ?? "https://api.kurier.xyz/api/v1").replace(/\/$/, ""),
+    pubfiApiUrl: (process.env.PUBFI_API_URL ?? "https://api.pubfi.ai").replace(/\/$/, ""),
     wasmPath: join(root, "circuits", "gatekeeper.wasm"),
     zkeyPath: join(root, "circuits", "gatekeeper_final.zkey"),
     vkPath: join(root, "circuits", "vk.json"),

@@ -6,7 +6,9 @@
  * Spawns the compiled server on a test port with a test HMAC secret, replays
  * the fixtures in test/fixtures/, and prints PASS/FAIL per case. Also runs a
  * direct-layer test of the APPROVE path (decide + Prover), which the HTTP
- * layer cannot reach without a Subscan API key (fail-closed PROOF_NOT_FOUND).
+ * layer cannot reach without a PubFi API key (fail-closed PROOF_NOT_FOUND),
+ * plus mocked PubFi Gateway tests for confirmProofTx (no real key, no
+ * network calls to PubFi/Subscan/Kurier).
  *
  * The harness never touches production secrets: test secret only, no Kurier
  * key, no Subscan key. It seeds data/seen.json with the reused proof_tx
@@ -97,7 +99,7 @@ async function main() {
     ...process.env,
     AGENT_GAMES_HMAC_SECRET: TEST_SECRET,
     KURIER_API_KEY: "",
-    SUBSCAN_API_KEY: "",
+    PUBFI_API_KEY: "",
     PORT: String(PORT),
     LOG_LEVEL: "error",
   };
@@ -201,6 +203,62 @@ async function main() {
     const enc1 = Prover.encodeTaskId("gk_24_9d1");
     const enc2 = Prover.encodeTaskId("gk_24_9d1");
     check("taskId encoding is deterministic (keccak256 mod p)", enc1 === enc2, `encoded=${enc1.slice(0, 24)}...`);
+
+    // --- direct layer: PubFi Gateway confirmProofTx (mocked fetch, no real key) ---
+    const { confirmProofTx } = await import(path.join(ROOT, "dist", "zkverify.js"));
+    const TX = "0x" + "ab".repeat(32);
+    const baseDeps = {
+      kurierApiUrl: "https://api.kurier.xyz/api/v1",
+      kurierApiKey: null,
+      pubfiApiKey: "test-pubfi-key",
+      pubfiApiUrl: "https://api.pubfi.ai",
+    };
+    const okBody = { code: 0, data: { extrinsic: { block_num: 1234567, success: true } } };
+    // (a) free variant success — exact URL + Bearer auth asserted.
+    {
+      const seen = [];
+      const mockFetch = async (url, init) => {
+        seen.push({ url, auth: init.headers.Authorization, body: JSON.parse(init.body) });
+        return new Response(JSON.stringify(okBody), { status: 200, headers: { "Content-Type": "application/json" } });
+      };
+      const r = await confirmProofTx(TX, { ...baseDeps, pubfiFetch: mockFetch });
+      check(
+        "pubfi gateway: free variant confirms a successful extrinsic",
+        r.confirmed === true && r.source === "pubfi" && r.blockNumber === 1234567 &&
+          seen.length === 1 &&
+          seen[0].url === "https://api.pubfi.ai/v1/gateway/subscan/zkverify/api/scan/extrinsic:free" &&
+          seen[0].auth === "Bearer test-pubfi-key" && seen[0].body.hash === TX,
+        `confirmed=${r.confirmed} source=${r.source} block=${r.blockNumber} calls=${seen.length}`,
+      );
+    }
+    // (b) free variant 402 -> one billed fallback, same Bearer auth.
+    {
+      const seen = [];
+      const mockFetch = async (url) => {
+        seen.push(url);
+        if (url.endsWith(":free")) return new Response(JSON.stringify({ message: "free variant unavailable" }), { status: 402 });
+        return new Response(JSON.stringify(okBody), { status: 200, headers: { "Content-Type": "application/json" } });
+      };
+      const r = await confirmProofTx(TX, { ...baseDeps, pubfiFetch: mockFetch });
+      check(
+        "pubfi gateway: 402 on free variant falls back once to billed variant",
+        r.confirmed === true && r.source === "pubfi" && seen.length === 2 &&
+          seen[1] === "https://api.pubfi.ai/v1/gateway/subscan/zkverify/api/scan/extrinsic",
+        `confirmed=${r.confirmed} calls=${seen.length}`,
+      );
+    }
+    // (c) extrinsic not found -> unconfirmed (fail closed).
+    {
+      const mockFetch = async () =>
+        new Response(JSON.stringify({ code: 0, data: null }), { status: 200, headers: { "Content-Type": "application/json" } });
+      const r = await confirmProofTx(TX, { ...baseDeps, pubfiFetch: mockFetch });
+      check("pubfi gateway: missing extrinsic -> unconfirmed", r.confirmed === false && r.source === "pubfi", `detail=${r.detail}`);
+    }
+    // (d) no key -> source "none" (fail closed).
+    {
+      const r = await confirmProofTx(TX, { ...baseDeps, pubfiApiKey: null });
+      check("pubfi gateway: no key -> unconfirmed, source none", r.confirmed === false && r.source === "none", `detail=${r.detail}`);
+    }
   } catch (err) {
     console.error("harness error:", err);
     exitCode = 1;

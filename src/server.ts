@@ -61,10 +61,10 @@ export class GatekeeperServer {
     if (!this.kurier.enabled) {
       log("warn", "KURIER_API_KEY not set — proofs will NOT be submitted to zkVerify (local proof only)");
     }
-    if (!config.subscanApiKey) {
+    if (!config.pubfiApiKey) {
       log(
         "warn",
-        "SUBSCAN_API_KEY not set — proof_tx cannot be confirmed on-chain; otherwise-valid tasks will be REJECTED with PROOF_NOT_FOUND (fail closed). See README.",
+        "PUBFI_API_KEY not set — proof_tx cannot be confirmed on-chain; otherwise-valid tasks will be REJECTED with PROOF_NOT_FOUND (fail closed). See README.",
       );
     }
   }
@@ -126,7 +126,8 @@ export class GatekeeperServer {
     const confirmation = await confirmProofTx(input.proof_tx, {
       kurierApiUrl: this.config.kurierApiUrl,
       kurierApiKey: this.config.kurierApiKey,
-      subscanApiKey: this.config.subscanApiKey,
+      pubfiApiKey: this.config.pubfiApiKey,
+      pubfiApiUrl: this.config.pubfiApiUrl,
     });
     if (!confirmation.confirmed) {
       log("warn", "proof_tx NOT confirmed on-chain — rejecting (fail closed)", {
@@ -329,7 +330,7 @@ export class GatekeeperServer {
       uptime_s: Math.floor(process.uptime()),
       seen_entries: this.seen.size,
       kurier_enabled: this.kurier.enabled,
-      subscan_configured: this.config.subscanApiKey !== null,
+      pubfi_configured: this.config.pubfiApiKey !== null,
       vk_hash_prefix: this.config.gatekeeperVkHash.slice(0, 10),
       in_flight: this.inFlight,
     });
@@ -352,7 +353,7 @@ export class GatekeeperServer {
       log("info", "proof-gatekeeper listening", {
         port: this.config.port,
         kurier_enabled: this.kurier.enabled,
-        subscan_configured: this.config.subscanApiKey !== null,
+        pubfi_configured: this.config.pubfiApiKey !== null,
         seen_entries: this.seen.size,
       });
     });

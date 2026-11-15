@@ -22,7 +22,7 @@ deadline. Any timeout, error, or uncertainty resolves to REJECT (fail closed).
   checks passing) fails witness generation — the circuit is a real referee.
 - **Proof generation: ~0.4–0.5 s per proof** (first proof in a fresh process
   ~1.1 s, wasm load included). Measured locally, snarkjs 0.7.5, Node 24.
-- **Harness: 16/16 checks pass** (`npm test`).
+- **Harness: 20/20 checks pass** (`npm test`).
 - **Kurier endpoints confirmed from docs.zkverify.io**: `POST
   /register-vk/{key}`, `POST /submit-proof/{key}`, `GET
   /job-status/{key}/{jobId}` at `https://api.kurier.xyz/api/v1`.
@@ -67,8 +67,9 @@ npm run build
 npm start              # listens on $PORT (default 3000)
 ```
 
-Test: `npm run build && npm test` (16 checks; uses a throwaway test secret,
-no real keys, no network calls to Kurier/Subscan).
+Test: `npm run build && npm test` (20 checks; uses a throwaway test secret,
+no real keys, no network calls to Kurier/PubFi/Subscan — the gateway path
+is tested with a mocked fetch).
 
 ## Environment variables
 
@@ -76,11 +77,12 @@ no real keys, no network calls to Kurier/Subscan).
 |---|---|---|
 | `AGENT_GAMES_HMAC_SECRET` | **yes** | From the dashboard ("Rotate Secret"). Service refuses to start without a real value. |
 | `KURIER_API_KEY` | yes, for scoring | Kurier mainnet key (https://kurier.xyz). Without it, proofs are generated locally but never submitted (no Finalized confirmation). |
-| `SUBSCAN_API_KEY` | **yes, for approvals** | See "The proof_tx confirmation problem" — without it every valid task is rejected. |
+| `PUBFI_API_KEY` | **yes, for approvals** | See "The proof_tx confirmation problem" — without it every valid task is rejected. |
 | `AGENT_GAMES_AGENT_ID` | no | `agt_...`; if set, preflights with another id are rejected. |
 | `PORT` | no | default 3000. |
 | `GATEKEEPER_VK_HASH` | no | default is the canonical mainnet hash `0x6b79c6…`. |
 | `KURIER_API_URL` | no | default `https://api.kurier.xyz/api/v1` (testnet: `https://api-testnet.kurier.xyz/api/v1`). |
+| `PUBFI_API_URL` | no | default `https://api.pubfi.ai`. |
 
 Secrets come from the environment only. Never hardcode or commit them;
 `.env` is gitignored. Nothing secret is ever logged (only truncated
@@ -146,26 +148,51 @@ read API** for this:
 - Kurier's `job-status` only covers jobs submitted through Kurier itself
   (`proof_tx` is a chain tx hash, not a Kurier job id — except the
   UUID-shaped case, which this service does check via Kurier).
-- Subscan runs the zkVerify explorer and its API
+- Subscan runs the zkVerify explorer and its direct API
   (`POST https://zkverify.api.subscan.io/api/scan/extrinsic`,
   `{"hash": "0x..."}`) returns the extrinsic + block + success flag — but
   it now returns **HTTP 403 "Subscan API strictly requires an API key"**
-  for unauthenticated calls (verified live 2026-11-15).
+  for unauthenticated calls (verified live 2026-11-15), and Subscan **no
+  longer issues free direct API keys** (docs updated 2026-10-20; direct
+  keys are paid-only, Developer $182/yr+).
 - No public Volta RPC URL is published in the Agent Games docs.
 
-This service therefore confirms `proof_tx` via the Subscan API **only when
-`SUBSCAN_API_KEY` is set**, and otherwise returns "unconfirmed" — which
+The official free route is the **PubFi Gateway** (Subscan tutorial,
+https://support.subscan.io/doc-360177): create a PubFi account, create a
+PubFi API key, and call an eligible Subscan route through the gateway.
+PubFi and direct Subscan credentials are **not** interchangeable. The
+route this service uses was verified against the live PubFi Runtime
+OpenAPI (generation 301, 2026-11-15):
+
+- `POST https://api.pubfi.ai/v1/gateway/subscan/zkverify/api/scan/extrinsic`
+  (+ `:free` suffix for the free variant), `Authorization: Bearer
+  <PUBFI_API_KEY>`, body `{"hash": "0x..."}`. Free variant: 2 req/s, max
+  concurrency 2, quota 20,000/day, consumes no Credits. Billed variant: 1
+  Credit per call — used only as a one-shot fallback if the free variant
+  answers 402/429 (the account holds 1,000 pre-granted Credits; no
+  purchase is involved).
+
+This service therefore confirms `proof_tx` via the PubFi Gateway **only
+when `PUBFI_API_KEY` is set**, and otherwise returns "unconfirmed" — which
 makes the engine **REJECT every otherwise-valid task with
 `PROOF_NOT_FOUND`**. That is deliberate and fail-closed: an unverified
 proof_tx must never be approved (−6 for a wrong approve beats −3 for a
 wrong reject, and an unconfirmed approve is exactly the trap this track
 punishes).
 
-**Action required:** get a free Subscan API key (sign up at
-https://subscan.io, create a key under your account) and set
-`SUBSCAN_API_KEY`. Until then, approvals cannot happen. Do not weaken this
+**Action required:** create a PubFi API key (sign up at
+https://pubfi.ai, Dashboard → API keys; the complete secret is shown
+only once — store it in a secret manager immediately) and set
+`PUBFI_API_KEY`. Until then, approvals cannot happen. Do not weaken this
 check without an explicit decision — the alternative (approve on an
 unverified `proof_tx`) is how this track is lost.
+
+**One unverified assumption:** the gateway relays the upstream Subscan
+body opaquely, so the parser expects the direct-Subscan shape
+(`{code: 0, data: {extrinsic: {block_num, success}}}`). If the first live
+task shows a different shape, the lookup fails closed (PROOF_NOT_FOUND)
+and the parser is a one-line fix in `src/zkverify.ts`
+(`parseExtrinsicResponse`).
 
 ## Deploy to Railway
 
@@ -176,7 +203,7 @@ unverified `proof_tx`) is how this track is lost.
    `npm start`. Set `PORT` from Railway's `$PORT` (it is injected
    automatically; the service reads `process.env.PORT`).
 3. In the service Variables tab, set `AGENT_GAMES_HMAC_SECRET`,
-   `KURIER_API_KEY`, `SUBSCAN_API_KEY` (no other secrets needed).
+   `KURIER_API_KEY`, `PUBFI_API_KEY` (no other secrets needed).
 4. Generate a public domain; `GET /health` must return `{"ok":true,...}`.
    The endpoint to register is `https://<your-domain>/agent` (HTTPS only).
 
@@ -203,8 +230,8 @@ unverified `proof_tx`) is how this track is lost.
   logs `task_id`, `decision`, `reason_code`, `prove_ms`, and the Kurier
   job id when present. No secrets, HMAC values, or full bodies are logged.
 - `GET /health` reports `seen_entries`, `kurier_enabled`,
-  `subscan_configured`, and `in_flight`.
-- Watch for: `PROOF_NOT_FOUND` on every valid task (= missing Subscan
+  `pubfi_configured`, and `in_flight`.
+- Watch for: `PROOF_NOT_FOUND` on every valid task (= missing PubFi
   key), Kurier `Failed` jobs (= check `curve`/`vk` fields), and any
   `PROOF_GENERATION_FAILED` (= check the circuit artifacts are intact).
 
