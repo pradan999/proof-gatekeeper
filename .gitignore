@@ -1,0 +1,9 @@
+.env
+node_modules/
+dist/
+data/
+*.log
+.DS_Store
+# Circuit artifacts are binary and fetched at deploy time (see scripts/fetch-circuits.mjs)
+circuits/*.wasm
+circuits/*.zkey

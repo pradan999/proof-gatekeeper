@@ -1,0 +1,1 @@
+{"builds":[{"nixpacks":{"providers":["node"]}}],"deploy":{"healthcheckPath":"/health","numReplicas":1,"restartPolicyType":"ON_FAILURE"}}
